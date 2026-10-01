@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipe Friction Loss Calculator</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; }
+    input { width: 100%; padding: 0.4rem; box-sizing: border-box; }
+    button { margin-top: 1.5rem; padding: 0.5rem 1.5rem; }
+    .row { display: flex; gap: 0.5rem; }
+    .row input, .row #temperature { flex: 1; }
+    .pressure { border-collapse: collapse; margin-bottom: 1rem; }
+    .pressure caption { text-align: left; font-weight: 600; margin-bottom: 0.4rem; }
+    .pressure th { text-align: left; font-weight: normal; padding: 0.3rem 1.5rem 0.3rem 0; }
+    .pressure td { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+    #result { margin-top: 1.5rem; }
+    .note { color: #666; font-size: 0.85rem; }
+    .disclaimer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #ccc; color: #555; font-size: 0.85rem; }
+    .disclaimer h2 { font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Pipe Friction Loss Calculator</h1>
+  <p class="note">Darcy-Weisbach with Colebrook-White friction factor. Fluid is water at the selected temperature.</p>
+
+  <form id="calc" autocomplete="off">
+    <label>Pipe length
+      <span class="row">
+        <input type="number" id="length" min="0" step="any" required>
+        <select id="lengthUnit" aria-label="Pipe length unit">
+          <option value="1" selected>m</option>
+          <option value="0.3048">ft</option>
+        </select>
+      </span>
+    </label>
+    <label>Pipe internal diameter
+      <span class="row">
+        <input type="number" id="diameter" min="0" step="any" required>
+        <select id="diameterUnit" aria-label="Pipe internal diameter unit">
+          <option value="0.001" selected>mm</option>
+          <option value="0.0254">in</option>
+        </select>
+      </span>
+    </label>
+    <p class="note">Enter the actual internal bore, not the nominal size. Pipes of the same nominal size can have different internal diameters depending on material and pressure rating. If unsure, check the pipe's spec sheet or measure it directly.</p>
+    <label>Flow rate
+      <span class="row">
+        <input type="number" id="flow" min="0" step="any" required>
+        <select id="flowUnit" aria-label="Flow rate unit">
+          <option value="0.001">L/s</option>
+          <option value="0.0000166666666667" selected>L/min</option>
+          <option value="0.000277777777778">m³/h</option>
+          <option value="0.0000630901964">US gal/min</option>
+          <option value="0.0000757681666667">UK gal/min</option>
+        </select>
+      </span>
+    </label>
+    <label>Water temperature
+      <span class="row">
+        <select id="temperature">
+          <option value="5">5 °C</option>
+          <option value="10">10 °C</option>
+          <option value="15">15 °C</option>
+          <option value="20" selected>20 °C</option>
+          <option value="25">25 °C</option>
+        </select>
+        <select id="tempUnit" aria-label="Temperature unit">
+          <option value="C" selected>°C</option>
+          <option value="F">°F</option>
+        </select>
+      </span>
+    </label>
+    <label>Pipe material
+      <select id="material">
+        <option value="0.0015">PVC / UPVC</option>
+        <option value="0.007" selected>HDPE</option>
+        <option value="0.0015">LDPE</option>
+        <option value="0.0015">Copper</option>
+        <option value="0.045">New steel</option>
+        <option value="0.015">Stainless steel</option>
+        <option value="0.175">Medium / aged steel</option>
+        <option value="0.15">Galvanized steel</option>
+        <option value="0.015">Rubber lined</option>
+        <option value="0.26">Cast iron</option>
+        <option value="30">Corrugated steel</option>
+        <option value="1.5">Concrete</option>
+        <option value="custom">Custom</option>
+      </select>
+    </label>
+    <label>Pipe roughness (mm)
+      <input type="number" id="roughness" min="0" step="any" value="0.007" required>
+    </label>
+    <p class="note">Filled in from the material. Type your own value to override it.</p>
+    <button type="submit">Calculate</button>
+  </form>
+
+  <div id="result"></div>
+
+  <section class="disclaimer">
+    <h2>Disclaimer</h2>
+    <p>This calculator is provided to assist with general pipe friction loss queries. Please work with a qualified professional to confirm the results are suitable for your specific situation.</p>
+    <p>No responsibility is accepted for any errors or omissions in this calculator, or for any misuse of its results. The results do not constitute professional engineering advice.</p>
+  </section>
+
+  <script>
+    const G = 9.81;      // gravity, m/s²
+    // Properties of water by temperature (°C): kinematic viscosity nu (m²/s) and density rho (kg/m³).
+    const WATER = {
+      5:  { nu: 1.519e-6, rho: 999.97 },
+      10: { nu: 1.306e-6, rho: 999.70 },
+      15: { nu: 1.139e-6, rho: 999.10 },
+      20: { nu: 1.004e-6, rho: 998.21 },
+      25: { nu: 0.893e-6, rho: 997.05 },
+    };
+
+    // Solve Colebrook-White iteratively, starting from the Swamee-Jain approximation.
+    function colebrook(re, relRough) {
+      let f = 0.25 / Math.pow(Math.log10(relRough / 3.7 + 5.74 / Math.pow(re, 0.9)), 2);
+      for (let i = 0; i < 50; i++) {
+        const next = Math.pow(-2 * Math.log10(relRough / 3.7 + 2.51 / (re * Math.sqrt(f))), -2);
+        if (Math.abs(next - f) < 1e-10) return next;
+        f = next;
+      }
+      return f;
+    }
+
+    // Temperature options always hold °C values (used to look up WATER); only their labels change.
+    const temperature = document.getElementById('temperature');
+    const tempUnit = document.getElementById('tempUnit');
+    function labelTemperatures() {
+      for (const opt of temperature.options) {
+        const c = Number(opt.value);
+        opt.textContent = tempUnit.value === 'F' ? `${c * 9 / 5 + 32} °F` : `${c} °C`;
+      }
+    }
+    tempUnit.addEventListener('change', labelTemperatures);
+    labelTemperatures(); // in case the browser restored °F on reload
+
+    // When a unit changes, convert the number already entered so it means the same quantity.
+    // Unit option values are conversion factors to SI, so new = old × oldFactor / newFactor.
+    // The previous factor is stored on the select itself so it can be resynced if the browser restores form state.
+    const unitPairs = [['length', 'lengthUnit'], ['diameter', 'diameterUnit'], ['flow', 'flowUnit']];
+    for (const [inputId, unitId] of unitPairs) {
+      const input = document.getElementById(inputId);
+      const unit = document.getElementById(unitId);
+      unit.dataset.factor = unit.value;
+      unit.addEventListener('change', () => {
+        const newFactor = parseFloat(unit.value);
+        const value = parseFloat(input.value);
+        if (!isNaN(value)) input.value = Number((value * parseFloat(unit.dataset.factor) / newFactor).toPrecision(6));
+        unit.dataset.factor = unit.value;
+      });
+    }
+
+    // Browsers may restore previous selections on reload or back/forward navigation without firing
+    // 'change'. Resync stored factors and temperature labels to whatever is actually displayed.
+    window.addEventListener('pageshow', () => {
+      for (const [, unitId] of unitPairs) {
+        const unit = document.getElementById(unitId);
+        unit.dataset.factor = unit.value;
+      }
+      labelTemperatures();
+    });
+
+    const material = document.getElementById('material');
+    const roughness = document.getElementById('roughness');
+
+    // Picking a material fills in its roughness; typing a roughness switches the material to Custom.
+    material.addEventListener('change', () => {
+      if (material.value !== 'custom') roughness.value = material.value;
+    });
+    roughness.addEventListener('input', () => {
+      material.value = 'custom';
+    });
+
+    document.getElementById('calc').addEventListener('submit', (e) => {
+      e.preventDefault();
+      // Length and diameter unit option values are conversion factors to metres.
+      const L = parseFloat(document.getElementById('length').value) * parseFloat(document.getElementById('lengthUnit').value);
+      const D = parseFloat(document.getElementById('diameter').value) * parseFloat(document.getElementById('diameterUnit').value);
+      // Each unit option's value is its conversion factor to m³/s (1 US gal = 3.785411784 L, 1 UK gal = 4.54609 L).
+      const Q = parseFloat(document.getElementById('flow').value) * parseFloat(document.getElementById('flowUnit').value);
+      const eps = parseFloat(document.getElementById('roughness').value) / 1000;
+      const { nu, rho } = WATER[document.getElementById('temperature').value];
+      const out = document.getElementById('result');
+
+      if (!(L > 0 && D > 0 && Q > 0 && eps >= 0)) {
+        out.textContent = 'Please enter positive values for length, diameter and flow rate.';
+        return;
+      }
+
+      const area = Math.PI * D * D / 4;
+      const V = Q / area;
+      const re = V * D / nu;
+      const laminar = re < 2300;
+      const f = laminar ? 64 / re : colebrook(re, eps / D);
+      const hf = f * (L / D) * (V * V) / (2 * G);
+
+      const dp = rho * G * hf; // pressure loss, Pa
+
+      out.innerHTML = `
+        <h2>Head loss: ${hf.toFixed(3)} metres of head (mH)</h2>
+        <table class="pressure">
+          <caption>Equivalent pressure loss</caption>
+          <tr><th>Kilopascals</th><td>${(dp / 1000).toFixed(2)} kPa</td></tr>
+          <tr><th>Bar</th><td>${(dp / 1e5).toFixed(4)} bar</td></tr>
+          <tr><th>Pounds per square inch</th><td>${(dp / 6894.757).toFixed(3)} psi</td></tr>
+        </table>
+        <p>Velocity: ${V.toFixed(3)} m/s</p>
+        <p>Reynolds number: ${Math.round(re).toLocaleString()} (${laminar ? 'laminar' : 'turbulent'})</p>
+        <p>Friction factor: ${f.toFixed(5)}${laminar ? ' (64/Re)' : ' (Colebrook-White)'}</p>
+      `;
+    });
+  </script>
+</body>
+</html>
